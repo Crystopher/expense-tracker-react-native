@@ -3,14 +3,18 @@ import { Image, StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView,
 import { SafeAreaView } from 'react-native-safe-area-context';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Picker } from '@react-native-picker/picker';
-import { PieChart } from 'react-native-chart-kit';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
+import * as WebBrowser from 'expo-web-browser';
+import { useAuthRequest, makeRedirectUri } from 'expo-auth-session';
 import appTitleImage from '../assets/expense-tracker-title.png';
-import { screenWidth, predefined_banks, categories, months, years } from '../src/constants';
+import { screenWidth, predefined_banks, categories, months, years } from '../src/common/constants';
 import { Colors } from '../src/styles/AllStyles';
-import { formatCurrency, getBankIconName } from '../src/utils';
+import { formatCurrency, getBankIconName } from '../src/common/utils';
 import { CustomAlert } from '../src/screens/CustomAlert.js';
+import { ChartContainer } from './components/ChartContainer.js';
+
+WebBrowser.maybeCompleteAuthSession();
 
 // Componente principale dell'app
 const App = () => {
@@ -54,6 +58,12 @@ const App = () => {
   const [editingRecurringId, setEditingRecurringId] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
 
+  // Stati per Google Drive
+  const [userInfo, setUserInfo] = useState(null);
+  const [isBackingUp, setIsBackingUp] = useState(false);
+  const [isRestoring, setIsRestoring] = useState(false);
+
+
   // Funzione per mostrare il popup personalizzato
   const showCustomAlert = (title, message, onConfirm, onCancel = () => {setIsAlertVisible(false)}, showCancel = false) => {
     setAlertTitle(title);
@@ -63,6 +73,34 @@ const App = () => {
     setShowCancelButton(showCancel);
     setIsAlertVisible(true);
   };
+
+  // Configurazione Autenticazione Google
+  const discovery = {
+    authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+    tokenEndpoint: 'https://oauth2.googleapis.com/token',
+    revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
+  };
+
+  const [request, response, promptAsync] = useAuthRequest(
+    {
+      // ATTENZIONE: Sostituisci con i tuoi Client ID da Google Cloud Console
+      iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
+      androidClientId: '273919129646-igop9vk2e00j39rcnmobacsqi3r0ajb7.apps.googleusercontent.com',
+      scopes: ['https://www.googleapis.com/auth/drive.appdata', 'https://www.googleapis.com/auth/userinfo.profile'],
+      redirectUri: makeRedirectUri({
+        scheme: 'com.galford81.ExpenseTracker'
+      }),
+    },
+    discovery
+  );
+
+  // Gestisce la risposta di autenticazione
+  useEffect(() => {
+    if (response?.type === 'success') {
+      const { authentication } = response;
+      if (authentication?.accessToken) fetchUserInfo(authentication.accessToken);
+    }
+  }, [response]);
 
   // Carica i dati da Async Storage all'avvio
   const loadData = async () => {
@@ -116,6 +154,14 @@ const App = () => {
     }
   };
 
+  // Ottiene le informazioni dell'utente dopo il login
+  const fetchUserInfo = async (token) => {
+    const response = await fetch('https://www.googleapis.com/userinfo/v2/me', {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    const user = await response.json();
+    setUserInfo({ ...user, accessToken: token });
+  };
   const getNextDueDate = (currentDueDate, frequency, interval) => {
     const date = new Date(currentDueDate);
     const numericInterval = parseInt(interval, 10);
@@ -382,6 +428,110 @@ const App = () => {
     }
   };
 
+  // Funzione di Backup su Google Drive
+  const backupData = async () => {
+    if (!userInfo) {
+      showCustomAlert("Autenticazione Richiesta", "Per favore, autenticati con Google per continuare.", () => promptAsync());
+      return;
+    }
+
+    setIsBackingUp(true);
+    try {
+      const storedData = await AsyncStorage.getItem('financeData');
+      if (!storedData) {
+        showCustomAlert("Nessun Dato", "Non ci sono dati da salvare.", () => {});
+        return;
+      }
+
+      const fileName = `ExpenseTracker_Backup_${new Date().toISOString().split('T')[0]}.json`;
+      const fileContent = storedData;
+      const accessToken = userInfo.accessToken;
+
+      const metadata = {
+        name: fileName,
+        parents: ['appDataFolder'], // Salva nella cartella dati dell'app, non visibile all'utente
+      };
+
+      const form = new FormData();
+      form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
+      form.append('file', new Blob([fileContent], { type: 'application/json' }));
+
+      const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${accessToken}` },
+        body: form,
+      });
+
+      if (res.ok) {
+        showCustomAlert("Backup Completato", `I tuoi dati sono stati salvati su Google Drive come "${fileName}".`, () => {});
+      } else {
+        const error = await res.json();
+        console.error("Google Drive Backup Error:", error);
+        showCustomAlert("Errore di Backup", `Impossibile salvare su Google Drive. Dettagli: ${error.error.message}`, () => {});
+      }
+    } catch (error) {
+      console.error("Errore durante il backup:", error);
+      showCustomAlert("Errore", "Si è verificato un problema durante il backup.", () => {});
+    } finally {
+      setIsBackingUp(false);
+    }
+  };
+
+  // Funzione di Ripristino da Google Drive
+  const restoreData = async () => {
+    if (!userInfo) {
+      showCustomAlert("Autenticazione Richiesta", "Per favore, autenticati con Google per continuare.", () => promptAsync());
+      return;
+    }
+
+    setIsRestoring(true);
+    try {
+      const accessToken = userInfo.accessToken;
+      const listRes = await fetch('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name)&orderBy=createdTime desc', {
+        headers: { Authorization: `Bearer ${accessToken}` },
+      });
+
+      if (!listRes.ok) throw new Error('Impossibile elencare i file.');
+      const { files } = await listRes.json();
+
+      if (files.length === 0) {
+        showCustomAlert("Nessun Backup", "Nessun file di backup trovato su Google Drive.", () => {});
+        setIsRestoring(false);
+        return;
+      }
+
+      const latestBackup = files[0];
+
+      showCustomAlert(
+        "Conferma Ripristino",
+        `Vuoi ripristinare i dati dal backup "${latestBackup.name}"? L'operazione sovrascriverà i dati attuali.`,
+        async () => {
+          try {
+            const fileRes = await fetch(`https://www.googleapis.com/drive/v3/files/${latestBackup.id}?alt=media`, {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            if (!fileRes.ok) throw new Error('Impossibile scaricare il file.');
+            const backupDataString = await fileRes.text();
+            const parsedData = JSON.parse(backupDataString);
+            await saveData(parsedData.transactions, parsedData.accounts, parsedData.recurringTransactions);
+            showCustomAlert("Ripristino Completato", "I dati sono stati ripristinati con successo. Ricarica l'app per vedere le modifiche.", () => setIsAlertVisible(false));
+          } catch (e) {
+            console.error("Errore durante il ripristino:", e);
+            showCustomAlert("Errore di Ripristino", "Impossibile ripristinare i dati.", () => {});
+          } finally {
+            setIsRestoring(false);
+          }
+        },
+        () => setIsRestoring(false),
+        true
+      );
+    } catch (error) {
+      console.error("Errore durante il ripristino:", error);
+      showCustomAlert("Errore", "Si è verificato un problema durante il ripristino.", () => {});
+      setIsRestoring(false);
+    }
+  };
+
   // Carica i dati all'avvio del componente
   useEffect(() => {
     const initAndProcess = async () => {
@@ -463,25 +613,7 @@ const App = () => {
       </View>
 
       {/* Grafico a Torta delle Spese */}
-      <View style={styles.chartContainer}>
-        <Text style={styles.listHeader}>Ripartizione Spese</Text>
-        {pieChartData.length > 0 ? (
-          <PieChart
-            data={pieChartData}
-            width={screenWidth - 40}
-            height={220}
-            chartConfig={{
-              color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-            }}
-            accessor="amount"
-            backgroundColor="transparent"
-            paddingLeft="15"
-            absolute
-          />
-        ) : (
-          <Text style={styles.emptyText}>Nessuna spesa nel periodo selezionato.</Text>
-        )}
-      </View>
+      <ChartContainer screenWidth={screenWidth} pieChartData={pieChartData}/>
 
       {/* Card del Saldo Totale */}
       <View style={[styles.dashboardCard, styles.balanceCard]}>
@@ -793,6 +925,28 @@ const App = () => {
         <TouchableOpacity style={[styles.button, styles.cancelButton, { marginTop: 20 }]} onPress={handleResetData}>
           <Text style={styles.buttonText}>Resetta Dati</Text>
         </TouchableOpacity>
+
+        <View style={styles.separator} />
+
+        <Text style={styles.listHeader}>Backup & Ripristino</Text>
+        {userInfo ? (
+          <View>
+            <Text style={styles.userInfoText}>Connesso come: {userInfo.name}</Text>
+            <TouchableOpacity style={[styles.button, styles.googleButton]} onPress={backupData} disabled={isBackingUp || isRestoring}>
+              <Text style={styles.buttonText}>{isBackingUp ? "Salvataggio in corso..." : "Backup su Google Drive"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.button, styles.googleButton]} onPress={restoreData} disabled={isBackingUp || isRestoring}>
+              <Text style={styles.buttonText}>{isRestoring ? "Ripristino in corso..." : "Ripristina da Google Drive"}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.button, styles.logoutButton]} onPress={() => setUserInfo(null)}>
+              <Text style={styles.buttonText}>Logout</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (
+          <TouchableOpacity style={[styles.button, styles.googleButton]} onPress={() => promptAsync()} disabled={!request}>
+            <Text style={styles.buttonText}>Login con Google</Text>
+          </TouchableOpacity>
+        )}
       </View>
 
       {/* Lista dei conti esistenti */}
@@ -1233,6 +1387,22 @@ const styles = StyleSheet.create({
     color: Colors.text,
     marginBottom: 10,
     textAlign: 'center',
+  },
+  separator: {
+    height: 1,
+    backgroundColor: '#4b5563',
+    marginVertical: 20,
+  },
+  userInfoText: {
+    color: Colors.text,
+    textAlign: 'center',
+    marginBottom: 10,
+  },
+  googleButton: {
+    backgroundColor: '#4285F4', // Google Blue
+  },
+  logoutButton: {
+    backgroundColor: Colors.placeholder,
   },
 });
 const bankModalStyles = StyleSheet.create({
