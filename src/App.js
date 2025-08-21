@@ -6,131 +6,11 @@ import { Picker } from '@react-native-picker/picker';
 import { PieChart } from 'react-native-chart-kit';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
-import appTitleImage from './assets/expense-tracker-title.png';
-
-
-const Colors = {
-  primary: '#4f46e5',
-  primaryDark: '#3730a3',
-  secondary: '#10b981',
-  background: '#1f2937',
-  cardBackground: '#374151',
-  text: '#f3f4f6',
-  placeholder: '#9ca3af',
-  red: '#ef4444',
-  chartColors: ['#a855f7', '#6366f1', '#f97316', '#ef4444', '#10b981', '#3b82f6', '#f59e0b'],
-  icon: '#9ca3af',
-};
-
-const screenWidth = Dimensions.get('window').width;
-
-// Funzione per formattare gli importi in valuta
-const formatCurrency = (amount) => {
-  return `€${amount.toFixed(2).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}`;
-};
-
-// Componente personalizzato per il popup di avviso/conferma
-const CustomAlert = ({ isVisible, title, message, onConfirm, onCancel, showCancelButton }) => {
-  return (
-    <Modal
-      animationType="fade"
-      transparent={true}
-      visible={isVisible}
-      onRequestClose={() => {
-        onCancel();
-      }}
-    >
-      <View style={customAlertStyles.centeredView}>
-        <View style={customAlertStyles.modalView}>
-          <Text style={customAlertStyles.modalTitle}>{title}</Text>
-          <Text style={customAlertStyles.modalText}>{message}</Text>
-          <View style={customAlertStyles.buttonContainer}>
-            {showCancelButton && (
-              <Pressable
-                style={[customAlertStyles.button, customAlertStyles.buttonCancel]}
-                onPress={onCancel}
-              >
-                <Text style={customAlertStyles.textStyle}>Annulla</Text>
-              </Pressable>
-            )}
-            <Pressable
-              style={[customAlertStyles.button, customAlertStyles.buttonConfirm]}
-              onPress={onConfirm}
-            >
-              <Text style={customAlertStyles.textStyle}>{showCancelButton ? 'Conferma' : 'OK'}</Text>
-            </Pressable>
-          </View>
-        </View>
-      </View>
-    </Modal>
-  );
-};
-
-const customAlertStyles = StyleSheet.create({
-  centeredView: {
-    flex: 1,
-    justifyContent: "center",
-    alignItems: "center",
-    backgroundColor: 'rgba(0,0,0,0.5)',
-  },
-  modalView: {
-    margin: 20,
-    backgroundColor: Colors.cardBackground,
-    borderRadius: 20,
-    padding: 35,
-    alignItems: "center",
-    shadowColor: "#000",
-    shadowOffset: {
-      width: 0,
-      height: 2
-    },
-    shadowOpacity: 0.25,
-    shadowRadius: 4,
-    elevation: 5
-  },
-  modalTitle: {
-    marginBottom: 15,
-    textAlign: "center",
-    fontSize: 20,
-    fontWeight: 'bold',
-    color: Colors.text,
-  },
-  modalText: {
-    marginBottom: 20,
-    textAlign: "center",
-    color: Colors.text,
-  },
-  buttonContainer: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    width: '100%',
-  },
-  button: {
-    borderRadius: 10,
-    padding: 10,
-    elevation: 2,
-    flex: 1,
-  },
-  buttonConfirm: {
-    backgroundColor: Colors.primary,
-    marginLeft: 5,
-  },
-  buttonCancel: {
-    backgroundColor: Colors.red,
-    marginRight: 5,
-  },
-  textStyle: {
-    color: Colors.text,
-    fontWeight: "bold",
-    textAlign: "center"
-  }
-});
-
-// Elenco delle banche comuni per l'autocompletamento
-const PREDEFINED_BANKS = [
-  'Poste Italiane', 'Intesa Sanpaolo', 'UniCredit', 'Banca Sella', 'Banco BPM', 'Monte dei Paschi di Siena (MPS)',
-  'BNL', 'BPER Banca', 'Credem', 'FinecoBank', 'Mediolanum', 'ING', 'Revolut', 'Hype', 'N26', 'PayPal'
-];
+import appTitleImage from '../assets/expense-tracker-title.png';
+import { screenWidth, predefined_banks, categories, months, years } from '../src/constants';
+import { Colors } from '../src/styles/AllStyles';
+import { formatCurrency, getBankIconName } from '../src/utils';
+import { CustomAlert } from '../src/screens/CustomAlert.js';
 
 // Componente principale dell'app
 const App = () => {
@@ -169,14 +49,10 @@ const App = () => {
   const [accountNumber, setAccountNumber] = useState('');
   const [accountDescription, setAccountDescription] = useState('');
   const [isBankModalVisible, setIsBankModalVisible] = useState(false);
-  const [filteredBanks, setFilteredBanks] = useState(PREDEFINED_BANKS);
+  const [filteredBanks, setFilteredBanks] = useState(predefined_banks);
   const [editingAccountId, setEditingAccountId] = useState(null);
   const [editingRecurringId, setEditingRecurringId] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
-
-  const categories = ['Cibo', 'Trasporti', 'Casa', 'Uscite', 'Salute', 'Lavoro', 'Altro'];
-  const months = ['Gennaio', 'Febbraio', 'Marzo', 'Aprile', 'Maggio', 'Giugno', 'Luglio', 'Agosto', 'Settembre', 'Ottobre', 'Novembre', 'Dicembre'];
-  const years = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i);
 
   // Funzione per mostrare il popup personalizzato
   const showCustomAlert = (title, message, onConfirm, onCancel = () => {setIsAlertVisible(false)}, showCancel = false) => {
@@ -186,42 +62,6 @@ const App = () => {
     setAlertOnCancel(() => onCancel);
     setShowCancelButton(showCancel);
     setIsAlertVisible(true);
-  };
-
-  // Funzione per ottenere l'icona del conto in base al nome della banca
-  const getBankIconName = (bankName) => {
-    const lowerCaseName = bankName.toLowerCase();
-    if (lowerCaseName.includes('poste') || lowerCaseName.includes('postepay')) {
-      return 'post';
-    } else if (lowerCaseName.includes('intesa')) {
-      return 'bank-outline';
-    } else if (lowerCaseName.includes('unicredit')) {
-      return 'piggy-bank-outline';
-    } else if (lowerCaseName.includes('banca sella')) {
-      return 'hand-coin-outline';
-    } else if (lowerCaseName.includes('banco bpm')) {
-      return 'handshake-outline';
-    } else if (lowerCaseName.includes('monte dei paschi')) {
-      return 'castle-outline';
-    } else if (lowerCaseName.includes('bnl')) {
-      return 'bank-plus';
-    } else if (lowerCaseName.includes('bper')) {
-      return 'safe-square-outline';
-    } else if (lowerCaseName.includes('credem')) {
-      return 'cash-check';
-    } else if (lowerCaseName.includes('fineco')) {
-      return 'chart-line';
-    } else if (lowerCaseName.includes('mediolanum')) {
-      return 'office-building-outline';
-    } else if (lowerCaseName.includes('ing')) {
-      return 'finance';
-    } else if (lowerCaseName.includes('revolut') || lowerCaseName.includes('hype') || lowerCaseName.includes('n26')) {
-      return 'credit-card-fast-outline';
-    } else if (lowerCaseName.includes('paypal')) {
-      return 'paypal';
-    } else {
-      return 'bank'; // Icona generica per le altre banche
-    }
   };
 
   // Carica i dati da Async Storage all'avvio
@@ -378,7 +218,7 @@ const App = () => {
 
   };
 
-  const handleSaveRecurringTransaction = (type) => {
+  const handleSaveRecurringTransaction = (type) => { // Handles both create and update
     const interval = parseInt(recurrenceInterval, 10);
     const count = parseInt(recurrenceCount, 10);
 
@@ -438,38 +278,6 @@ const App = () => {
       },
       () => setIsAlertVisible(false),
       true // Mostra il pulsante "Annulla"
-    );
-  };
-
-  const handleEditRecurring = (template) => {
-    setEditingId(null); // Assicurati di non essere in modalità di modifica di una transazione normale
-    setEditingRecurringId(template.id);
-
-    setAmount(template.amount.toString());
-    setDescription(template.description);
-    setCategory(template.category);
-    setAccountId(template.accountId);
-    setTransactionDate(new Date(template.startDate));
-    
-    setIsRecurring(true);
-    setRecurrenceFrequency(template.frequency);
-    setRecurrenceInterval(template.interval.toString());
-    setRecurrenceCount(template.count.toString());
-
-    setView(template.type === 'expense' ? 'addExpense' : 'addIncome');
-  };
-
-  const handleDeleteRecurring = (id) => {
-    showCustomAlert(
-      "Conferma Eliminazione",
-      "Vuoi eliminare questa serie ricorrente? Le transazioni già create non saranno rimosse.",
-      () => {
-        const updatedRecurring = recurringTransactions.filter(t => t.id !== id);
-        saveData(null, null, updatedRecurring);
-        showCustomAlert("Eliminata", "La serie ricorrente è stata eliminata.", () => setIsAlertVisible(false));
-      },
-      () => setIsAlertVisible(false),
-      true
     );
   };
 
@@ -565,23 +373,12 @@ const App = () => {
   const handleBankInputChange = (text) => {
     setAccountBank(text);
     if (text.length > 0) {
-      const filtered = PREDEFINED_BANKS.filter(bank =>
+      const filtered = predefined_banks.filter(bank =>
         bank.toLowerCase().includes(text.toLowerCase())
       );
       setFilteredBanks(filtered);
     } else {
-      setFilteredBanks(PREDEFINED_BANKS);
-    }
-  };
-
-  const getFrequencyLabel = (frequency, interval) => {
-    const isPlural = parseInt(interval, 10) > 1;
-    switch (frequency) {
-        case 'daily': return isPlural ? 'giorni' : 'giorno';
-        case 'weekly': return isPlural ? 'settimane' : 'settimana';
-        case 'monthly': return isPlural ? 'mesi' : 'mese';
-        case 'yearly': return isPlural ? 'anni' : 'anno';
-        default: return '';
+      setFilteredBanks(predefined_banks);
     }
   };
 
@@ -664,10 +461,39 @@ const App = () => {
           ))}
         </Picker>
       </View>
+
+      {/* Grafico a Torta delle Spese */}
+      <View style={styles.chartContainer}>
+        <Text style={styles.listHeader}>Ripartizione Spese</Text>
+        {pieChartData.length > 0 ? (
+          <PieChart
+            data={pieChartData}
+            width={screenWidth - 40}
+            height={220}
+            chartConfig={{
+              color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
+            }}
+            accessor="amount"
+            backgroundColor="transparent"
+            paddingLeft="15"
+            absolute
+          />
+        ) : (
+          <Text style={styles.emptyText}>Nessuna spesa nel periodo selezionato.</Text>
+        )}
+      </View>
+
+      {/* Card del Saldo Totale */}
+      <View style={[styles.dashboardCard, styles.balanceCard]}>
+        <Text style={styles.cardTitle}>Saldo Totale</Text>
+        <Text style={[styles.cardAmount, totalBalance >= 0 ? styles.incomeText : styles.expenseText]}>
+          {formatCurrency(totalBalance)}
+        </Text>
+      </View>
       
       {/* Selettore del periodo */}
-      <View style={styles.filterContainer}>
-        <Text style={styles.pickerLabel}>Periodo:</Text>
+      <View style={styles.chartContainer}>
+        <Text style={styles.listHeader}>Filtri</Text>
         <Picker
           selectedValue={filterPeriod}
           onValueChange={(itemValue) => setFilterPeriod(itemValue)}
@@ -675,8 +501,8 @@ const App = () => {
           itemStyle={styles.pickerItem}
         >
           <Picker.Item label="Totale" value="total" />
-          <Picker.Item label="Questo Mese" value="month" />
-          <Picker.Item label="Questo Anno" value="year" />
+          <Picker.Item label="Mese" value="month" />
+          <Picker.Item label="Anno" value="year" />
         </Picker>
       </View>
       {filterPeriod === 'month' && (
@@ -724,14 +550,6 @@ const App = () => {
         </View>
       )}
 
-      {/* Card del Saldo Totale */}
-      <View style={[styles.dashboardCard, styles.balanceCard]}>
-        <Text style={styles.cardTitle}>Saldo Totale</Text>
-        <Text style={[styles.cardAmount, totalBalance >= 0 ? styles.incomeText : styles.expenseText]}>
-          {formatCurrency(totalBalance)}
-        </Text>
-      </View>
-
       {/* Card dei Totali */}
       <View style={styles.totalsContainer}>
         <View style={[styles.dashboardCard, styles.incomeCard]}>
@@ -764,27 +582,6 @@ const App = () => {
           ))
         ) : (
           <Text style={styles.emptyText}>Nessun conto aggiunto.</Text>
-        )}
-      </View>
-      
-      {/* Grafico a Torta delle Spese */}
-      <View style={styles.chartContainer}>
-        <Text style={styles.listHeader}>Ripartizione Spese</Text>
-        {pieChartData.length > 0 ? (
-          <PieChart
-            data={pieChartData}
-            width={screenWidth - 40}
-            height={220}
-            chartConfig={{
-              color: (opacity = 1) => `rgba(255, 255, 255, ${opacity})`,
-            }}
-            accessor="amount"
-            backgroundColor="transparent"
-            paddingLeft="15"
-            absolute
-          />
-        ) : (
-          <Text style={styles.emptyText}>Nessuna spesa nel periodo selezionato.</Text>
         )}
       </View>
 
@@ -824,11 +621,7 @@ const App = () => {
   // Renderizza il form per aggiungere Spese/Entrate
   const renderForm = (type) => (
     <ScrollView style={styles.scrollContainer}>
-      <Text style={styles.header}>
-        {editingId ? `Modifica ${type === 'expense' ? 'Spesa' : 'Entrata'}` : 
-         editingRecurringId ? 'Modifica Serie Ricorrente' :
-         `Aggiungi ${type === 'expense' ? 'Spesa' : 'Entrata'}`}
-      </Text>
+      <Text style={styles.header}>{editingId ? `Modifica ${type === 'expense' ? 'Spesa' : 'Entrata'}` : `Aggiungi ${type === 'expense' ? 'Spesa' : 'Entrata'}`}</Text>
       <View style={styles.formContainer}>
         {accounts.length === 0 ? (
           <Text style={styles.emptyText}>Per favore, aggiungi un conto prima di aggiungere una transazione.</Text>
@@ -881,6 +674,7 @@ const App = () => {
           <Text style={styles.switchLabel}>Transazione Ricorrente</Text>
           <Switch
             trackColor={{ false: Colors.placeholder, true: Colors.secondary }}
+            thumbColor={isRecurring ? Colors.text : '#f4f3f4'}
             onValueChange={setIsRecurring}
             value={isRecurring}
           />
