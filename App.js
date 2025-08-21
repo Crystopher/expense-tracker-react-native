@@ -171,6 +171,7 @@ const App = () => {
   const [isBankModalVisible, setIsBankModalVisible] = useState(false);
   const [filteredBanks, setFilteredBanks] = useState(PREDEFINED_BANKS);
   const [editingAccountId, setEditingAccountId] = useState(null);
+  const [editingRecurringId, setEditingRecurringId] = useState(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
 
   const categories = ['Cibo', 'Trasporti', 'Casa', 'Uscite', 'Salute', 'Lavoro', 'Altro'];
@@ -411,7 +412,10 @@ const App = () => {
     setTransactionDate(new Date()); setIsRecurring(false); setRecurrenceFrequency('monthly');
     setRecurrenceInterval('1'); setRecurrenceCount('12'); setAccountId(accounts.length > 0 ? accounts[0].id : null);
     processRecurringTransactions(transactions, updatedRecurring);
-    showCustomAlert("Transazione Ricorrente Aggiunta", "La serie di transazioni ricorrenti è stata creata.", () => setView('dashboard'));
+    showCustomAlert("Transazione Ricorrente Aggiunta", "La serie di transazioni ricorrenti è stata creata.", () => {
+      setIsAlertVisible(false);
+      setView('dashboard');
+    });
   };
 
   const onDateChange = (event, selectedDate) => {
@@ -434,6 +438,38 @@ const App = () => {
       },
       () => setIsAlertVisible(false),
       true // Mostra il pulsante "Annulla"
+    );
+  };
+
+  const handleEditRecurring = (template) => {
+    setEditingId(null); // Assicurati di non essere in modalità di modifica di una transazione normale
+    setEditingRecurringId(template.id);
+
+    setAmount(template.amount.toString());
+    setDescription(template.description);
+    setCategory(template.category);
+    setAccountId(template.accountId);
+    setTransactionDate(new Date(template.startDate));
+    
+    setIsRecurring(true);
+    setRecurrenceFrequency(template.frequency);
+    setRecurrenceInterval(template.interval.toString());
+    setRecurrenceCount(template.count.toString());
+
+    setView(template.type === 'expense' ? 'addExpense' : 'addIncome');
+  };
+
+  const handleDeleteRecurring = (id) => {
+    showCustomAlert(
+      "Conferma Eliminazione",
+      "Vuoi eliminare questa serie ricorrente? Le transazioni già create non saranno rimosse.",
+      () => {
+        const updatedRecurring = recurringTransactions.filter(t => t.id !== id);
+        saveData(null, null, updatedRecurring);
+        showCustomAlert("Eliminata", "La serie ricorrente è stata eliminata.", () => setIsAlertVisible(false));
+      },
+      () => setIsAlertVisible(false),
+      true
     );
   };
 
@@ -535,6 +571,17 @@ const App = () => {
       setFilteredBanks(filtered);
     } else {
       setFilteredBanks(PREDEFINED_BANKS);
+    }
+  };
+
+  const getFrequencyLabel = (frequency, interval) => {
+    const isPlural = parseInt(interval, 10) > 1;
+    switch (frequency) {
+        case 'daily': return isPlural ? 'giorni' : 'giorno';
+        case 'weekly': return isPlural ? 'settimane' : 'settimana';
+        case 'monthly': return isPlural ? 'mesi' : 'mese';
+        case 'yearly': return isPlural ? 'anni' : 'anno';
+        default: return '';
     }
   };
 
@@ -777,7 +824,11 @@ const App = () => {
   // Renderizza il form per aggiungere Spese/Entrate
   const renderForm = (type) => (
     <ScrollView style={styles.scrollContainer}>
-      <Text style={styles.header}>{editingId ? `Modifica ${type === 'expense' ? 'Spesa' : 'Entrata'}` : `Aggiungi ${type === 'expense' ? 'Spesa' : 'Entrata'}`}</Text>
+      <Text style={styles.header}>
+        {editingId ? `Modifica ${type === 'expense' ? 'Spesa' : 'Entrata'}` : 
+         editingRecurringId ? 'Modifica Serie Ricorrente' :
+         `Aggiungi ${type === 'expense' ? 'Spesa' : 'Entrata'}`}
+      </Text>
       <View style={styles.formContainer}>
         {accounts.length === 0 ? (
           <Text style={styles.emptyText}>Per favore, aggiungi un conto prima di aggiungere una transazione.</Text>
@@ -830,7 +881,6 @@ const App = () => {
           <Text style={styles.switchLabel}>Transazione Ricorrente</Text>
           <Switch
             trackColor={{ false: Colors.placeholder, true: Colors.secondary }}
-            thumbColor={isRecurring ? Colors.text : '#f4f3f4'}
             onValueChange={setIsRecurring}
             value={isRecurring}
           />
