@@ -6,8 +6,8 @@ import { Picker } from '@react-native-picker/picker';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as WebBrowser from 'expo-web-browser';
-import * as Google from 'expo-auth-session/providers/google'
-import { useAuthRequest, makeRedirectUri } from 'expo-auth-session';
+import * as Google from 'expo-auth-session/providers/google';
+import { makeRedirectUri, refreshAsync, revokeAsync } from 'expo-auth-session';
 import appTitleImage from '../assets/expense-tracker-title.png';
 import { screenWidth, predefined_banks, categories, months, years } from '../src/common/constants';
 import { Colors } from '../src/styles/AllStyles';
@@ -83,12 +83,12 @@ const App = () => {
     revocationEndpoint: 'https://oauth2.googleapis.com/revoke'
   };
 
-  const [request, response, promptAsync] = Google.useIdTokenAuthRequest(
+  const [request, response, promptAsync] = Google.useAuthRequest(
     {
       // ATTENZIONE: Sostituisci con i tuoi Client ID da Google Cloud Console
       webClientId: '273919129646-q1s9blu3r1aeikqq36ccs04muu463g8r.apps.googleusercontent.com',
       androidClientId: '273919129646-igop9vk2e00j39rcnmobacsqi3r0ajb7.apps.googleusercontent.com',
-      scopes: ['openid', 'https://www.googleapis.com/auth/drive.appdata', 'https://www.googleapis.com/auth/userinfo.profile'],
+      scopes: ['openid', 'https://www.googleapis.com/auth/drive.appdata', 'https://www.googleapis.com/auth/userinfo.profile', 'offline_access'],
       redirectUri: makeRedirectUri({
         scheme: 'com.galford81.expensetracker',
         native: 'com.galford81.expensetracker://',
@@ -102,7 +102,10 @@ const App = () => {
   useEffect(() => {
     if (response?.type === 'success') {
       const { authentication } = response;
-      if (authentication?.accessToken) fetchUserInfo(authentication.accessToken);
+      if (authentication) {
+        AsyncStorage.setItem('googleAuth', JSON.stringify(authentication));
+        fetchUserInfo(authentication.accessToken);
+      }
     }
   }, [response]);
 
@@ -165,6 +168,41 @@ const App = () => {
     });
     const user = await response.json();
     setUserInfo({ ...user, accessToken: token });
+  };
+
+  // Controlla lo stato del login all'avvio
+  const checkLoginStatus = async () => {
+    try {
+      const storedAuth = await AsyncStorage.getItem('googleAuth');
+      if (!storedAuth) return;
+
+      let auth = JSON.parse(storedAuth);
+
+      // Controlla se il token è scaduto (con un buffer di 1 minuto)
+      const expirationTime = (auth.issuedAt + auth.expiresIn) * 1000;
+      if (Date.now() >= expirationTime - 60000) {
+        if (auth.refreshToken) {
+          const newAuth = await refreshAsync({
+            clientId: '273919129646-igop9vk2e00j39rcnmobacsqi3r0ajb7.apps.googleusercontent.com',
+            refreshToken: auth.refreshToken,
+          }, discovery);
+
+          const mergedAuth = { ...newAuth, refreshToken: newAuth.refreshToken || auth.refreshToken };
+          await AsyncStorage.setItem('googleAuth', JSON.stringify(mergedAuth));
+          auth = mergedAuth;
+        } else {
+          await AsyncStorage.removeItem('googleAuth');
+          return;
+        }
+      }
+
+      if (auth.accessToken) {
+        fetchUserInfo(auth.accessToken);
+      }
+    } catch (error) {
+      console.error("Errore durante il controllo dello stato di login:", error);
+      await AsyncStorage.removeItem('googleAuth');
+    }
   };
   const getNextDueDate = (currentDueDate, frequency, interval) => {
     const date = new Date(currentDueDate);
@@ -554,9 +592,25 @@ const App = () => {
     }
   };
 
+  const handleLogout = async () => {
+    if (userInfo?.accessToken) {
+      try {
+        await revokeAsync({
+          token: userInfo.accessToken,
+          clientId: '273919129646-igop9vk2e00j39rcnmobacsqi3r0ajb7.apps.googleusercontent.com',
+        }, discovery);
+      } catch (error) {
+        console.error("Errore durante la revoca del token:", error);
+      }
+    }
+    await AsyncStorage.removeItem('googleAuth');
+    setUserInfo(null);
+  };
+
   // Carica i dati all'avvio del componente
   useEffect(() => {
     const initAndProcess = async () => {
+      await checkLoginStatus();
       const { loadedTransactions, loadedRecurring } = await loadData();
       await processRecurringTransactions(loadedTransactions, loadedRecurring);
     };
@@ -960,7 +1014,7 @@ const App = () => {
             <TouchableOpacity style={[styles.button, styles.googleButton]} onPress={restoreData} disabled={isBackingUp || isRestoring}>
               <Text style={styles.buttonText}>{isRestoring ? "Ripristino in corso..." : "Ripristina da Google Drive"}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.button, styles.logoutButton]} onPress={() => setUserInfo(null)}>
+            <TouchableOpacity style={[styles.button, styles.logoutButton]} onPress={handleLogout}>
               <Text style={styles.buttonText}>Logout</Text>
             </TouchableOpacity>
           </View>
