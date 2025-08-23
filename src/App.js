@@ -88,7 +88,7 @@ const App = () => {
       // ATTENZIONE: Sostituisci con i tuoi Client ID da Google Cloud Console
       webClientId: '273919129646-q1s9blu3r1aeikqq36ccs04muu463g8r.apps.googleusercontent.com',
       androidClientId: '273919129646-igop9vk2e00j39rcnmobacsqi3r0ajb7.apps.googleusercontent.com',
-      scopes: ['openid', 'https://www.googleapis.com/auth/drive.appdata', 'https://www.googleapis.com/auth/userinfo.profile', 'offline_access'],
+      scopes: ['openid', 'https://www.googleapis.com/auth/drive.appdata', 'https://www.googleapis.com/auth/userinfo.profile'],
       redirectUri: makeRedirectUri({
         scheme: 'com.galford81.expensetracker',
         native: 'com.galford81.expensetracker://',
