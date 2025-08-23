@@ -6,6 +6,7 @@ import { Picker } from '@react-native-picker/picker';
 import { MaterialCommunityIcons } from '@expo/vector-icons';
 import DateTimePicker from '@react-native-community/datetimepicker';
 import * as WebBrowser from 'expo-web-browser';
+import * as Google from 'expo-auth-session/providers/google'
 import { useAuthRequest, makeRedirectUri } from 'expo-auth-session';
 import appTitleImage from '../assets/expense-tracker-title.png';
 import { screenWidth, predefined_banks, categories, months, years } from '../src/common/constants';
@@ -13,6 +14,7 @@ import { Colors } from '../src/styles/AllStyles';
 import { formatCurrency, getBankIconName } from '../src/common/utils';
 import { CustomAlert } from '../src/screens/CustomAlert.js';
 import { ChartContainer } from './components/ChartContainer.js';
+import moment from 'moment/min/moment-with-locales';
 
 WebBrowser.maybeCompleteAuthSession();
 
@@ -78,17 +80,19 @@ const App = () => {
   const discovery = {
     authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
     tokenEndpoint: 'https://oauth2.googleapis.com/token',
-    revocationEndpoint: 'https://oauth2.googleapis.com/revoke',
+    revocationEndpoint: 'https://oauth2.googleapis.com/revoke'
   };
 
-  const [request, response, promptAsync] = useAuthRequest(
+  const [request, response, promptAsync] = Google.useIdTokenAuthRequest(
     {
       // ATTENZIONE: Sostituisci con i tuoi Client ID da Google Cloud Console
-      iosClientId: 'YOUR_IOS_CLIENT_ID.apps.googleusercontent.com',
+      webClientId: '273919129646-q1s9blu3r1aeikqq36ccs04muu463g8r.apps.googleusercontent.com',
       androidClientId: '273919129646-igop9vk2e00j39rcnmobacsqi3r0ajb7.apps.googleusercontent.com',
-      scopes: ['https://www.googleapis.com/auth/drive.appdata', 'https://www.googleapis.com/auth/userinfo.profile'],
+      scopes: ['openid', 'https://www.googleapis.com/auth/drive.appdata', 'https://www.googleapis.com/auth/userinfo.profile'],
       redirectUri: makeRedirectUri({
-        scheme: 'com.galford81.ExpenseTracker'
+        scheme: 'com.galford81.expensetracker',
+        native: 'com.galford81.expensetracker://',
+        isTripleSlashed: true
       }),
     },
     discovery
@@ -439,7 +443,7 @@ const App = () => {
     try {
       const storedData = await AsyncStorage.getItem('financeData');
       if (!storedData) {
-        showCustomAlert("Nessun Dato", "Non ci sono dati da salvare.", () => {});
+        showCustomAlert("Nessun Dato", "Non ci sono dati da salvare.", () => setIsAlertVisible(false));
         return;
       }
 
@@ -452,26 +456,39 @@ const App = () => {
         parents: ['appDataFolder'], // Salva nella cartella dati dell'app, non visibile all'utente
       };
 
-      const form = new FormData();
-      form.append('metadata', new Blob([JSON.stringify(metadata)], { type: 'application/json' }));
-      form.append('file', new Blob([fileContent], { type: 'application/json' }));
+      const boundary = '-------314159265358979323846';
+      const delimiter = `\r\n--${boundary}\r\n`;
+      const close_delim = `\r\n--${boundary}--`;
+
+      const metadataPart = `Content-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}`;
+      const filePart = `Content-Type: application/json\r\n\r\n${fileContent}`;
+
+      const multipartRequestBody =
+        delimiter +
+        metadataPart +
+        delimiter +
+        filePart +
+        close_delim;
 
       const res = await fetch('https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart', {
         method: 'POST',
-        headers: { Authorization: `Bearer ${accessToken}` },
-        body: form,
+        headers: {
+          'Authorization': `Bearer ${accessToken}`,
+          'Content-Type': `multipart/related; boundary=${boundary}`
+        },
+        body: multipartRequestBody,
       });
 
       if (res.ok) {
-        showCustomAlert("Backup Completato", `I tuoi dati sono stati salvati su Google Drive come "${fileName}".`, () => {});
+        showCustomAlert("Backup Completato", `I tuoi dati sono stati salvati su Google Drive come "${fileName}".`, () => setIsAlertVisible(false));
       } else {
         const error = await res.json();
         console.error("Google Drive Backup Error:", error);
-        showCustomAlert("Errore di Backup", `Impossibile salvare su Google Drive. Dettagli: ${error.error.message}`, () => {});
+        showCustomAlert("Errore di Backup", `Impossibile salvare su Google Drive. Dettagli: ${error.error.message}`, () => setIsAlertVisible(false));
       }
     } catch (error) {
       console.error("Errore durante il backup:", error);
-      showCustomAlert("Errore", "Si è verificato un problema durante il backup.", () => {});
+      showCustomAlert("Errore", "Si è verificato un problema durante il backup.", () => setIsAlertVisible(false));
     } finally {
       setIsBackingUp(false);
     }
@@ -487,7 +504,7 @@ const App = () => {
     setIsRestoring(true);
     try {
       const accessToken = userInfo.accessToken;
-      const listRes = await fetch('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name)&orderBy=createdTime desc', {
+      const listRes = await fetch('https://www.googleapis.com/drive/v3/files?spaces=appDataFolder&fields=files(id,name,createdTime)&orderBy=createdTime desc', {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
 
@@ -495,16 +512,21 @@ const App = () => {
       const { files } = await listRes.json();
 
       if (files.length === 0) {
-        showCustomAlert("Nessun Backup", "Nessun file di backup trovato su Google Drive.", () => {});
+        showCustomAlert("Nessun Backup", "Nessun file di backup trovato su Google Drive.", () => setIsAlertVisible(false));
         setIsRestoring(false);
         return;
       }
 
-      const latestBackup = files[0];
+      let ExpenseTrackerFiles = files.filter(function (el) {
+        return el.name.toLowerCase().indexOf("expensetracker_backup") > -1;
+      });
+
+      const latestBackup = ExpenseTrackerFiles[0];
+      moment.locale('it');
 
       showCustomAlert(
         "Conferma Ripristino",
-        `Vuoi ripristinare i dati dal backup "${latestBackup.name}"? L'operazione sovrascriverà i dati attuali.`,
+        `Vuoi ripristinare i dati dal backup "${latestBackup.name}" creato il ${moment(latestBackup.createdTime).format('d MMMM yyyy')} alle ${moment(latestBackup.createdTime).format('HH:mm')} ? L'operazione sovrascriverà i dati attuali.`,
         async () => {
           try {
             const fileRes = await fetch(`https://www.googleapis.com/drive/v3/files/${latestBackup.id}?alt=media`, {
@@ -517,17 +539,17 @@ const App = () => {
             showCustomAlert("Ripristino Completato", "I dati sono stati ripristinati con successo. Ricarica l'app per vedere le modifiche.", () => setIsAlertVisible(false));
           } catch (e) {
             console.error("Errore durante il ripristino:", e);
-            showCustomAlert("Errore di Ripristino", "Impossibile ripristinare i dati.", () => {});
+            showCustomAlert("Errore di Ripristino", "Impossibile ripristinare i dati.", () => setIsAlertVisible(false));
           } finally {
             setIsRestoring(false);
           }
         },
-        () => setIsRestoring(false),
+        () => { setIsRestoring(false); setIsAlertVisible(false); },
         true
       );
     } catch (error) {
       console.error("Errore durante il ripristino:", error);
-      showCustomAlert("Errore", "Si è verificato un problema durante il ripristino.", () => {});
+      showCustomAlert("Errore", "Si è verificato un problema durante il ripristino.", () => setIsAlertVisible(false));
       setIsRestoring(false);
     }
   };
