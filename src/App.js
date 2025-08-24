@@ -2787,6 +2787,42 @@ const styles = StyleSheet.create({
   },
 });
 const bankModalStyles = StyleSheet.create({
+  searchBar: {
+    height: 50,
+    backgroundColor: '#4b5563',
+    borderRadius: 10,
+    marginBottom: 15,
+    paddingHorizontal: 15,
+    fontSize: 16,
+    color: Colors.text,
+    width: '100%',
+  },
+  suggestionItem: {
+    paddingVertical: 15,
+    borderBottomWidth: 1,
+    borderBottomColor: '#4b5563',
+    width: '100%',
+  },
+  suggestionText: {
+    color: Colors.text,
+    fontSize: 16,
+  },
+  button: {
+    backgroundColor: Colors.primary,
+    padding: 15,
+    borderRadius: 10,
+    alignItems: 'center',
+    marginTop: 15,
+    width: '100%',
+  },
+  buttonClose: {
+    backgroundColor: Colors.placeholder,
+  },
+  textStyle: {
+    color: Colors.text,
+    fontSize: 18,
+    fontWeight: 'bold',
+  },
   centeredView: {
     flex: 1,
     justifyContent: "center",
@@ -2804,6 +2840,8 @@ const bankModalStyles = StyleSheet.create({
     shadowOpacity: 0.3,
     shadowRadius: 5,
     elevation: 6,
+    width: '90%',
+    maxHeight: '80%',
   },
   legendItem: {
     flexDirection: 'row',
