@@ -48,8 +48,12 @@ const App = () => {
   const [selectedMonth, setSelectedMonth] = useState(new Date().getMonth() + 1);
   const [selectedYear, setSelectedYear] = useState(new Date().getFullYear());
   const [selectedAccountId, setSelectedAccountId] = useState('all');
-  const [budgets, setBudgets] = useState({ total: 0, categories: {} });
-  const [dashboardView, setDashboardView] = useState('balance'); // 'balance', 'expenses', 'income'
+  const [filterCategories, setFilterCategories] = useState([]);
+  const [filterSubcategories, setFilterSubcategories] = useState([]);
+  const [isCategoryModalVisible, setIsCategoryModalVisible] = useState(false);
+  const [isSubcategoryModalVisible, setIsSubcategoryModalVisible] = useState(false);
+  const [budgets, setBudgets] = useState({ total: 0, categories: {} }); // 'balance', 'expenses', 'income', 'budget', 'future'
+  const [dashboardView, setDashboardView] = useState('balance');
   const [budgetSelectedMonth, setBudgetSelectedMonth] = useState(new Date().getMonth() + 1);
   const [budgetSelectedYear, setBudgetSelectedYear] = useState(new Date().getFullYear());
   const [isCalendarSyncEnabled, setIsCalendarSyncEnabled] = useState(false);
@@ -1200,9 +1204,30 @@ const App = () => {
       {data.map((item, index) => <LegendItemWithBudget key={index} item={item} />)}
     </View>
   );
+
+  const endOfToday = new Date();
+  endOfToday.setHours(23, 59, 59, 999); // Considera tutte le transazioni di oggi
+
+  // Calcola i saldi per ogni conto
+  const accountBalances = accounts.map(account => {
+    const accountIncome = transactions
+      .filter(t => t.type === 'income' && t.accountId === account.id && t.timestamp <= endOfToday.getTime())
+      .reduce((sum, t) => sum + t.amount, 0);
+    const accountExpenses = transactions
+      .filter(t => t.type === 'expense' && t.accountId === account.id && t.timestamp <= endOfToday.getTime())
+      .reduce((sum, t) => sum + t.amount, 0);
+    return {
+      ...account,
+      balance: accountIncome - accountExpenses,
+    };
+  });
+
   // Filtra le transazioni in base al periodo e al conto selezionato
   const filteredTransactions = transactions.filter(t => {
     const transactionDate = new Date(t.timestamp);
+    if (transactionDate > endOfToday) {
+      return false;
+    }
     const isPeriodMatch = () => {
       if (filterPeriod === 'month') {
         return transactionDate.getFullYear() === selectedYear && (transactionDate.getMonth() + 1) === selectedMonth;
@@ -1215,13 +1240,43 @@ const App = () => {
     const isAccountMatch = () => {
       return selectedAccountId === 'all' || t.accountId === selectedAccountId;
     };
-    return isPeriodMatch() && isAccountMatch();
+    const isCategoryMatch = () => {
+      return filterCategories.length === 0 || filterCategories.includes(t.category);
+    };
+    const isSubcategoryMatch = () => {
+      if (filterSubcategories.length === 0) {
+        return true;
+      }
+      return t.subcategory ? filterSubcategories.includes(t.subcategory) : false;
+    };
+    return isPeriodMatch() && isAccountMatch() && isCategoryMatch() && isSubcategoryMatch();
   });
 
+  // Filtra le transazioni future
+  const futureTransactions = transactions
+    .filter(t => {
+      const transactionDate = new Date(t.timestamp);
+      if (transactionDate <= endOfToday) {
+        return false;
+      }
+      const isAccountMatch = () => {
+        return selectedAccountId === 'all' || t.accountId === selectedAccountId;
+      };
+      const isCategoryMatch = () => {
+        return filterCategories.length === 0 || filterCategories.includes(t.category);
+      };
+      const isSubcategoryMatch = () => {
+        if (filterSubcategories.length === 0) {
+          return true;
+        }
+        return t.subcategory ? filterSubcategories.includes(t.subcategory) : false;
+      };
+      return isAccountMatch() && isCategoryMatch() && isSubcategoryMatch();
+    })
+    .sort((a, b) => a.timestamp - b.timestamp); // Ordina per data crescente
   // Calcola i totali per la dashboard
   const totalIncome = filteredTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
   const totalExpenses = filteredTransactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
-  const totalBalance = totalIncome - totalExpenses;
   
   // Calcola i totali per categoria per il grafico a torta
   const expensesByCategory = filteredTransactions.filter(t => t.type === 'expense').reduce((acc, t) => {
@@ -1229,6 +1284,23 @@ const App = () => {
     acc[cat] = (acc[cat] || 0) + t.amount;
     return acc;
   }, {});
+
+  // Calcoli specifici per la vista Saldo (non filtrati)
+  const allPastTransactions = transactions.filter(t => new Date(t.timestamp) <= endOfToday);
+  const balanceViewTotalBalance = accountBalances.reduce((sum, acc) => sum + acc.balance, 0);
+  const balanceViewRecentTransactions = allPastTransactions.slice(0, 10);
+  const balanceViewExpensesByCategory = allPastTransactions
+    .filter(t => t.type === 'expense')
+    .reduce((acc, t) => {
+      const cat = t.category || 'Altro';
+      acc[cat] = (acc[cat] || 0) + t.amount;
+      return acc;
+    }, {});
+  const balanceViewPieChartData = Object.keys(balanceViewExpensesByCategory).map((category, index) => ({
+    name: category,
+    amount: balanceViewExpensesByCategory[category],
+    color: Colors.chartColors[index % Colors.chartColors.length]
+  }));
 
   const pieChartData = Object.keys(expensesByCategory).map((category, index) => {
     return {
@@ -1246,15 +1318,46 @@ const App = () => {
   }, {});
 
   const incomePieChartData = Object.keys(incomeByCategory).map((category, index) => ({ name: category, amount: incomeByCategory[category], color: Colors.chartColors[index % Colors.chartColors.length] }));
-  // Calcola i saldi per ogni conto
-  const accountBalances = accounts.map(account => {
-    const accountIncome = transactions.filter(t => t.type === 'income' && t.accountId === account.id).reduce((sum, t) => sum + t.amount, 0);
-    const accountExpenses = transactions.filter(t => t.type === 'expense' && t.accountId === account.id).reduce((sum, t) => sum + t.amount, 0);
-    return {
-      ...account,
-      balance: accountIncome - accountExpenses,
-    };
-  });
+
+  const renderCategoryFilters = () => {
+    const availableSubcategories = (filterCategories.length > 0
+      ? categories
+          .filter(c => filterCategories.includes(c.name))
+          .flatMap(c => c.subcategories)
+      : categories.flatMap(c => c.subcategories)
+    ).filter((v, i, a) => a.indexOf(v) === i); // unique
+
+    return (
+    <>
+      <View style={styles.filterButtonContainer}>
+        <TouchableOpacity style={styles.filterButton} onPress={() => setIsCategoryModalVisible(true)}>
+          <Text style={styles.filterButtonText}>
+            Categorie ({filterCategories.length === 0 ? 'Tutte' : filterCategories.length})
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.filterButton}
+          onPress={() => setIsSubcategoryModalVisible(true)}
+        >
+          <Text style={styles.filterButtonText}>
+            Sottocategorie ({filterSubcategories.length === 0 ? 'Tutte' : filterSubcategories.length})
+          </Text>
+        </TouchableOpacity>
+      </View>
+      {/* Display selected items for clarity */}
+      {filterCategories.length > 0 && (
+        <View style={styles.filterInfoContainer}>
+          <Text style={styles.filterInfoText}>Cat: {filterCategories.join(', ')}</Text>
+        </View>
+      )}
+      {filterSubcategories.length > 0 && (
+        <View style={styles.filterInfoContainer}>
+          <Text style={styles.filterInfoText}>Sottocat: {filterSubcategories.join(', ')}</Text>
+        </View>
+      )}
+    </>
+    );
+  };
 
   const renderFilters = () => (
     <>
@@ -1273,6 +1376,8 @@ const App = () => {
           ))}
         </Picker>
       </View>
+
+      {renderCategoryFilters()}
 
       {/* Selettore del periodo */}
       <View style={styles.chartContainer}>
@@ -1454,7 +1559,11 @@ const App = () => {
     // Filtra le transazioni specificamente per la vista budget
     const budgetViewTransactions = transactions.filter(t => {
       const transactionDate = new Date(t.timestamp);
-      return transactionDate.getFullYear() === budgetSelectedYear && (transactionDate.getMonth() + 1) === budgetSelectedMonth;
+      if (transactionDate > endOfToday) {
+        return false;
+      }
+      return transactionDate.getFullYear() === budgetSelectedYear &&
+             (transactionDate.getMonth() + 1) === budgetSelectedMonth;
     });
 
     const budgetViewTotalExpenses = budgetViewTransactions
@@ -1519,119 +1628,155 @@ const App = () => {
       </ScrollView>
     );
   };
-  const renderBalanceView = () => {
-    let filterText = '';
-    if (filterPeriod === 'year') {
-      filterText = `(${selectedYear})`;
-    } else if (filterPeriod === 'month') {
-      const monthName = months[selectedMonth - 1];
-      filterText = `(${monthName} ${selectedYear})`;
-    }
+
+const renderFutureView = () => {
+    const totalFutureIncome = futureTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
+    const totalFutureExpenses = futureTransactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
 
     return (
       <ScrollView style={styles.scrollContainer}>
-      <Text style={styles.header}>Saldo
-        {filterText ? <Text style={styles.headerSubtitle}> {filterText}</Text> : null}
-      </Text>
+        <Text style={styles.header}>Transazioni Future</Text>
 
-      {/* Grafico a Torta delle Spese */}
-      <ChartContainer screenWidth={screenWidth - 40} pieChartData={pieChartData} centerTitle="Saldo Totale" centerAmount={totalBalance} centerAmountColor={totalBalance >= 0 ? Colors.secondary : Colors.red} />
-      {renderFilters()}
-      {pieChartData.length > 0 && renderChartLegend(pieChartData)}
+        {/* Card dei Totali Futuri */}
+        <View style={styles.totalsContainer}>
+          <View style={[styles.dashboardCard, styles.incomeCard]}>
+            <Text style={styles.cardTitle}>Entrate Future</Text>
+            <Text style={[styles.cardAmount, styles.incomeText]} numberOfLines={1} adjustsFontSizeToFit={true}>
+              {formatCurrency(totalFutureIncome)}
+            </Text>
+          </View>
+          <View style={[styles.dashboardCard, styles.expenseCard]}>
+            <Text style={styles.cardTitle}>Uscite Future</Text>
+            <Text style={[styles.cardAmount, styles.expenseText]} numberOfLines={1} adjustsFontSizeToFit={true}>
+              {formatCurrency(totalFutureExpenses)}
+            </Text>
+          </View>
+        </View>
 
-      {/* Progresso Budget Totale */}
-      {filterPeriod === 'month' && budgets.total > 0 && (
+        {/* Filtro per conto */}
+        <View style={styles.filterContainer}>
+          <Text style={styles.pickerLabel}>Conto:</Text>
+          <Picker
+            selectedValue={selectedAccountId}
+            onValueChange={(itemValue) => setSelectedAccountId(itemValue)}
+            style={styles.picker}
+            itemStyle={styles.pickerItem}
+          >
+            <Picker.Item label="Tutti i Conti" value="all" />
+            {accounts.map(acc => (
+              <Picker.Item key={acc.id} label={`${acc.bank} (${acc.description})`} value={acc.id} />
+            ))}
+          </Picker>
+        </View>
+
+        {renderCategoryFilters()}
+
+        {/* Lista Transazioni Future */}
         <View style={styles.recentTransactionsContainer}>
-          <Text style={styles.listHeader}>Progresso Budget Mensile</Text>
-          <BudgetProgressBar
-            spent={totalExpenses}
-            total={budgets.total}
-            label={`Speso: ${((totalExpenses / budgets.total) * 100).toFixed(1)}%`} />
+          <Text style={styles.listHeader}>Elenco Transazioni Future</Text>
+          {futureTransactions.length === 0 ? (
+            <Text style={styles.emptyText}>Nessuna transazione futura programmata.</Text>
+          ) : (
+            futureTransactions.map((t) => (
+              <View key={t.id} style={styles.transactionItem}>
+                <View style={styles.transactionInfo}>
+                  <Text style={styles.transactionDescription}>{t.description}</Text>
+                  <Text style={styles.transactionCategory}>
+                    {accounts.find(acc => acc.id === t.accountId)?.bank} • {t.category}{t.subcategory ? ` (${t.subcategory})` : ''} • {new Date(t.timestamp).toLocaleDateString('it-IT')}
+                  </Text>
+                </View>
+                <View style={styles.transactionButtons}>
+                  <TouchableOpacity onPress={() => handleEditTransaction(t)}>
+                    <MaterialCommunityIcons name="pencil" size={20} color={Colors.icon} style={{ marginRight: 10 }} />
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={() => handleDeleteTransaction(t.id)}>
+                    <MaterialCommunityIcons name="delete" size={20} color={Colors.red} />
+                  </TouchableOpacity>
+                </View>
+                <Text style={[styles.transactionAmount, t.type === 'expense' ? styles.expenseText : styles.incomeText]}>
+                  {t.type === 'expense' ? '-' : ''}{formatCurrency(t.amount)}
+                </Text>
+              </View>
+            ))
+          )}
         </View>
-      )}
+        <View style={styles.spacer} />
+      </ScrollView>
+    );
+  };
 
-      {/* Card dei Totali */}
-      <View style={styles.totalsContainer}>
-        <View style={[styles.dashboardCard, styles.incomeCard]}>
-          <Text style={styles.cardTitle}>Entrate</Text>
-          <Text
-            style={[styles.cardAmount, styles.incomeText]}
-            numberOfLines={1}
-            adjustsFontSizeToFit={true}>
-            {formatCurrency(totalIncome)}
-          </Text>
-        </View>
-        <View style={[styles.dashboardCard, styles.expenseCard]}>
-          <Text style={styles.cardTitle}>Uscite</Text>
-          <Text style={[styles.cardAmount, styles.expenseText]} numberOfLines={1} adjustsFontSizeToFit={true}>
-            {formatCurrency(totalExpenses)}
-          </Text>
-        </View>
-      </View>
+  const renderBalanceView = () => (
+    <ScrollView style={styles.scrollContainer}>
+      <Text style={styles.header}>Situazione Attuale</Text>
+
+      {/* Grafico a Torta delle Spese (non filtrato) */}
+      <ChartContainer
+        screenWidth={screenWidth - 40}
+        pieChartData={balanceViewPieChartData}
+        centerTitle="Saldo Totale"
+        centerAmount={balanceViewTotalBalance}
+        centerAmountColor={balanceViewTotalBalance >= 0 ? Colors.secondary : Colors.red}
+      />
+      {balanceViewPieChartData.length > 0 && renderChartLegend(balanceViewPieChartData)}
 
       {/* Lista saldi per conto */}
       <View style={styles.recentTransactionsContainer}>
         <Text style={styles.listHeader}>Saldi per Conto</Text>
         {accountBalances.length > 0 ? (
-          accountBalances.map(acc => (
-            <View key={acc.id} style={styles.accountItem}>
-              <View style={styles.accountIcon}>
-                <MaterialCommunityIcons name={getBankIconName(acc.bank)} size={24} color={Colors.text} />
-              </View>
-              <View style={styles.accountInfo}>
-                <Text style={styles.accountBank}>{acc.bank}</Text>
-                <Text style={styles.accountNumber}>{acc.description}</Text>
-              </View>
-              <Text style={[styles.accountBalance, acc.balance >= 0 ? styles.incomeText : styles.expenseText]}>
-                {formatCurrency(acc.balance)}
-              </Text>
+          accountBalances.map(acc => ( <View key={acc.id} style={styles.accountItem}>
+            <View style={styles.accountIcon}>
+              <MaterialCommunityIcons name={getBankIconName(acc.bank)} size={24} color={Colors.text} />
             </View>
-          ))
+            <View style={styles.accountInfo}>
+              <Text style={styles.accountBank}>{acc.bank}</Text>
+              <Text style={styles.accountNumber}>{acc.description}</Text>
+            </View>
+            <Text style={[styles.accountBalance, acc.balance >= 0 ? styles.incomeText : styles.expenseText]}>
+              {formatCurrency(acc.balance)}
+            </Text>
+          </View> ))
         ) : (
           <Text style={styles.emptyText}>Nessun conto aggiunto.</Text>
         )}
       </View>
 
-      {/* Transazioni Recenti */}
+      {/* Transazioni Recenti (non filtrate) */}
       <View style={styles.recentTransactionsContainer}>
         <View style={styles.listHeaderContainer}>
-          <Text style={styles.listHeader}>Transazioni Recenti</Text>
-          {filteredTransactions.length > 0 && (
+          <Text style={styles.listHeader}>Ultime Transazioni</Text>
+          {balanceViewRecentTransactions.length > 0 && (
             <TouchableOpacity onPress={() => setView('allTransactions')}>
               <Text style={styles.viewAllButtonText}>Mostra tutte</Text>
             </TouchableOpacity>
           )}
         </View>
-        {filteredTransactions.length === 0 ? (
-          <Text style={styles.emptyText}>Nessuna transazione nel periodo selezionato.</Text>
+        {balanceViewRecentTransactions.length === 0 ? (
+          <Text style={styles.emptyText}>Nessuna transazione registrata.</Text>
         ) : (
-          filteredTransactions.slice(0, 10).map((t) => (
-            <View key={t.id} style={styles.transactionItem}>
-              <View style={styles.transactionInfo}>
-                <Text style={styles.transactionDescription}>{t.description}</Text>
-                <Text style={styles.transactionCategory}>
-                  {accounts.find(acc => acc.id === t.accountId)?.bank} • {t.category}{t.subcategory ? ` (${t.subcategory})` : ''} • {new Date(t.timestamp).toLocaleDateString('it-IT')}
-                </Text>
-              </View>
-              <View style={styles.transactionButtons}>
-                <TouchableOpacity onPress={() => handleEditTransaction(t)}>
-                  <MaterialCommunityIcons name="pencil" size={20} color={Colors.icon} style={{ marginRight: 10 }} />
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => handleDeleteTransaction(t.id)}>
-                  <MaterialCommunityIcons name="delete" size={20} color={Colors.red} />
-                </TouchableOpacity>
-              </View>
-              <Text style={[styles.transactionAmount, t.type === 'expense' ? styles.expenseText : styles.incomeText]}>
-                {t.type === 'expense' ? '-' : ''}{formatCurrency(t.amount)}
+          balanceViewRecentTransactions.map((t) => ( <View key={t.id} style={styles.transactionItem}>
+            <View style={styles.transactionInfo}>
+              <Text style={styles.transactionDescription}>{t.description}</Text>
+              <Text style={styles.transactionCategory}>
+                {accounts.find(acc => acc.id === t.accountId)?.bank} • {t.category}{t.subcategory ? ` (${t.subcategory})` : ''} • {new Date(t.timestamp).toLocaleDateString('it-IT')}
               </Text>
             </View>
-          ))
+            <View style={styles.transactionButtons}>
+              <TouchableOpacity onPress={() => handleEditTransaction(t)}>
+                <MaterialCommunityIcons name="pencil" size={20} color={Colors.icon} style={{ marginRight: 10 }} />
+              </TouchableOpacity>
+              <TouchableOpacity onPress={() => handleDeleteTransaction(t.id)}>
+                <MaterialCommunityIcons name="delete" size={20} color={Colors.red} />
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.transactionAmount, t.type === 'expense' ? styles.expenseText : styles.incomeText]}>
+              {t.type === 'expense' ? '-' : ''}{formatCurrency(t.amount)}
+            </Text>
+          </View> ))
         )}
       </View>
       <View style={styles.spacer} />
     </ScrollView>
-    );
-  };
+  );
 
   // Renderizza la dashboard
   const renderDashboard = () => (
@@ -1658,11 +1803,17 @@ const App = () => {
           onPress={() => setDashboardView('budget')}>
           <Text style={styles.dashboardNavButtonText}>Budget</Text>
         </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.dashboardNavButton, dashboardView === 'future' && styles.dashboardNavButtonActive]}
+          onPress={() => setDashboardView('future')}>
+          <Text style={styles.dashboardNavButtonText}>Future</Text>
+        </TouchableOpacity>
       </View>
       {dashboardView === 'balance' && renderBalanceView()}
       {dashboardView === 'expenses' && renderExpensesView()}
       {dashboardView === 'income' && renderIncomeView()}
       {view === 'dashboard' && dashboardView === 'budget' && renderBudgetView()}
+      {dashboardView === 'future' && renderFutureView()}
     </View>
   );
 
@@ -2213,22 +2364,24 @@ const App = () => {
             value={accountBank}
             placeholderTextColor={Colors.placeholder}
           />
-          <FlatList
-            keyboardShouldPersistTaps="always"
-            data={filteredBanks}
-            renderItem={({ item }) => (
-              <TouchableOpacity
-                style={bankModalStyles.suggestionItem}
-                onPress={() => {
-                  setAccountBank(item);
-                  setIsBankModalVisible(false);
-                }}
-              >
-                <Text style={bankModalStyles.suggestionText}>{item}</Text>
-              </TouchableOpacity>
-            )}
-            keyExtractor={item => item}
-          />
+          <View style={bankModalStyles.flatListContainer}>
+            <FlatList
+              keyboardShouldPersistTaps="always"
+              data={filteredBanks}
+              renderItem={({ item }) => (
+                <TouchableOpacity
+                  style={bankModalStyles.suggestionItem}
+                  onPress={() => {
+                    setAccountBank(item);
+                    setIsBankModalVisible(false);
+                  }}
+                >
+                  <Text style={bankModalStyles.suggestionText}>{item}</Text>
+                </TouchableOpacity>
+              )}
+              keyExtractor={item => item}
+            />
+          </View>
           <Pressable
             style={[bankModalStyles.button, bankModalStyles.buttonClose]}
             onPress={() => setIsBankModalVisible(false)}
@@ -2239,6 +2392,52 @@ const App = () => {
       </View>
     </Modal>
   );
+
+  const MultiSelectModal = ({ isVisible, title, items, selectedItems, onCancel, onSave }) => {
+    const [tempSelection, setTempSelection] = useState([]);
+
+    useEffect(() => {
+      if (isVisible) {
+        setTempSelection(selectedItems);
+      }
+    }, [isVisible, selectedItems]);
+
+    const toggleItem = (item) => {
+      setTempSelection(prev =>
+        prev.includes(item) ? prev.filter(i => i !== item) : [...prev, item]
+      );
+    };
+
+    const renderItem = ({ item }) => (
+      <TouchableOpacity style={styles.multiSelectItem} onPress={() => toggleItem(item)}>
+        <MaterialCommunityIcons
+          name={tempSelection.includes(item) ? 'checkbox-marked' : 'checkbox-blank-outline'}
+          size={24}
+          color={Colors.primary}
+        />
+        <Text style={styles.multiSelectText}>{item}</Text>
+      </TouchableOpacity>
+    );
+
+    return (
+      <Modal animationType="slide" transparent={true} visible={isVisible} onRequestClose={onCancel}>
+        <View style={styles.centeredView}>
+          <View style={styles.modalView}>
+            <Text style={styles.modalTitle}>{title}</Text>
+            <FlatList style={styles.flatListContainer} data={items.sort((a, b) => a.localeCompare(b))} renderItem={renderItem} keyExtractor={item => item} />
+            <View style={styles.modalButtonContainer}>
+              <Pressable style={[styles.button, { flex: 1, marginRight: 10, backgroundColor: Colors.placeholder }]} onPress={onCancel}>
+                <Text style={styles.buttonText}>Annulla</Text>
+              </Pressable>
+              <Pressable style={[styles.button, { flex: 1 }]} onPress={() => onSave(tempSelection)}>
+                <Text style={styles.buttonText}>Salva</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.mainContainer}>
@@ -2306,15 +2505,114 @@ const App = () => {
         showCancelButton={showCancelButton}
       />
       {renderBankSuggestionsModal()}
+      <MultiSelectModal
+        isVisible={isCategoryModalVisible}
+        title="Seleziona Categorie"
+        items={categories.map(c => c.name)}
+        selectedItems={filterCategories}
+        onCancel={() => setIsCategoryModalVisible(false)}
+        onSave={(selection) => {
+          setFilterCategories(selection);
+          const newAvailableSubcategories = categories
+            .filter(c => selection.includes(c.name))
+            .flatMap(c => c.subcategories);
+          setFilterSubcategories(currentSubcategories => currentSubcategories.filter(sc => newAvailableSubcategories.includes(sc)));
+          setIsCategoryModalVisible(false);
+        }}
+      />
+      <MultiSelectModal
+        isVisible={isSubcategoryModalVisible}
+        title="Seleziona Sottocategorie"
+        items={(filterCategories.length > 0 ? categories.filter(c => filterCategories.includes(c.name)).flatMap(c => c.subcategories) : categories.flatMap(c => c.subcategories)).filter((v, i, a) => a.indexOf(v) === i)}
+        selectedItems={filterSubcategories}
+        onCancel={() => setIsSubcategoryModalVisible(false)}
+        onSave={(selection) => {
+          setFilterSubcategories(selection);
+          setIsSubcategoryModalVisible(false);
+        }}
+      />
     </SafeAreaView>
   );
 };
 
 // Fogli di stile per i componenti
 const styles = StyleSheet.create({
+  multiSelectText: {
+    marginLeft: 15,
+    fontSize: 16,
+    color: Colors.text,
+  },
+  multiSelectItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#4b5563',
+    width: '100%',
+  },
   mainContainer: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  filterButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-around',
+    marginBottom: 10,
+  },
+  filterButton: {
+    backgroundColor: '#4b5563',
+    paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    flex: 1,
+    marginHorizontal: 5,
+    alignItems: 'center',
+  },
+  filterButtonText: {
+    color: Colors.text,
+    fontWeight: 'bold',
+  },
+  filterInfoContainer: {
+    paddingHorizontal: 10,
+    paddingBottom: 10,
+  },
+  filterInfoText: {
+    color: Colors.placeholder,
+    fontSize: 12,
+    fontStyle: 'italic',
+   borderTopWidth: 1,
+    borderTopColor: '#4b5563',
+  },
+  centeredView: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: 'rgba(0,0,0,0.6)',
+  },
+  modalView: {
+    margin: 20,
+    backgroundColor: Colors.cardBackground,
+    borderRadius: 20,
+    padding: 20,
+    alignItems: "center",
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+    elevation: 6,
+    width: '90%',
+    maxHeight: '50%',
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: Colors.text,
+    marginBottom: 15,
+  },
+  modalButtonContainer: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginTop: 20,
   },
   titleContainer: {
     width: "100%",
@@ -2674,7 +2972,6 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.placeholder,
   },
   legendContainer: {
-    marginTop: 15,
     marginBottom: 15,
     paddingHorizontal: 10,
     backgroundColor: Colors.cardBackground,
@@ -2785,7 +3082,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     marginTop: 4,
   },
+  flatListContainer: {
+    height: '80%',
+    width: '100%',
+  },
 });
+
 const bankModalStyles = StyleSheet.create({
   searchBar: {
     height: 50,
@@ -2798,7 +3100,7 @@ const bankModalStyles = StyleSheet.create({
     width: '100%',
   },
   suggestionItem: {
-    paddingVertical: 15,
+    paddingVertical: 10,
     borderBottomWidth: 1,
     borderBottomColor: '#4b5563',
     width: '100%',
@@ -2841,7 +3143,7 @@ const bankModalStyles = StyleSheet.create({
     shadowRadius: 5,
     elevation: 6,
     width: '90%',
-    maxHeight: '80%',
+    maxHeight: '50%',
   },
   legendItem: {
     flexDirection: 'row',
@@ -2873,6 +3175,23 @@ const bankModalStyles = StyleSheet.create({
     backgroundColor: Colors.background,
     borderTopWidth: 1,
     borderTopColor: '#4b5563',
+  },
+  flatListContainer: {
+    width: '100%',
+    maxHeight: '60%',
+  },
+  multiSelectItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#4b5563',
+    width: '100%',
+  },
+  multiSelectText: {
+    marginLeft: 15,
+    fontSize: 16,
+    color: Colors.text,
   },
 });
 
