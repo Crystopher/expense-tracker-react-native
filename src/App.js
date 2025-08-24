@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { Image, StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, Dimensions, Modal, Pressable, FlatList, Switch } from 'react-native';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { Image, StyleSheet, View, Text, TextInput, TouchableOpacity, ScrollView, Modal, Pressable, FlatList, Switch } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { PieChart } from 'react-native-chart-kit';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -12,6 +12,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { makeRedirectUri, refreshAsync, revokeAsync } from 'expo-auth-session';
 import appTitleImage from '../assets/expense-tracker-title.png';
+import appSplashImage from '../assets/splash-screen.png';
 import { screenWidth, predefined_banks, categories as predefined_categories_flat, months, years } from './common/constants';
 import { Colors } from './styles/AllStyles';
 import { formatCurrency, getBankIconName } from './common/utils';
@@ -59,6 +60,11 @@ const App = () => {
   const [isCalendarSyncEnabled, setIsCalendarSyncEnabled] = useState(false);
 
   const [transactionDate, setTransactionDate] = useState(new Date());
+
+  // Stati per lo splash screen di caricamento
+  const [isLoading, setIsLoading] = useState(true);
+  const [loadingProgress, setLoadingProgress] = useState(0);
+  const [loadingMessage, setLoadingMessage] = useState('Inizializzazione...');
   const [recurringTransactions, setRecurringTransactions] = useState([]);
 
   // Stati per il form di ricorrenza
@@ -1097,12 +1103,31 @@ const App = () => {
   useEffect(() => {
     const initAndProcess = async () => {
       try {
+        setLoadingMessage('Controllo autenticazione...');
         await checkLoginStatus();
-        const { loadedTransactions, loadedRecurring, loadedAccounts } = await loadData(); // This now also loads categories
-      await processRecurringTransactions(loadedTransactions, loadedRecurring, loadedAccounts);
+        setLoadingProgress(25);
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        setLoadingMessage('Caricamento dati...');
+        const { loadedTransactions, loadedRecurring, loadedAccounts } = await loadData();
+        setLoadingProgress(50);
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        setLoadingMessage('Elaborazione transazioni ricorrenti...');
+        await processRecurringTransactions(loadedTransactions, loadedRecurring, loadedAccounts);
+        setLoadingProgress(75);
+        await new Promise(resolve => setTimeout(resolve, 100));
+
+        setLoadingMessage('Finalizzazione...');
+        setLoadingProgress(100);
+        
+        setTimeout(() => {
+            setIsLoading(false);
+        }, 500);
       } catch (error) {
         console.error("Errore durante l'inizializzazione:", error);
         showCustomAlert("Errore Critico", "Impossibile avviare l'app. Prova a riavviare.", () => {});
+        setIsLoading(false);
       }
     };
     initAndProcess();
@@ -1205,119 +1230,109 @@ const App = () => {
     </View>
   );
 
-  const endOfToday = new Date();
-  endOfToday.setHours(23, 59, 59, 999); // Considera tutte le transazioni di oggi
+  // --- Calcoli Derivati e Memoizzati ---
+  // Questa sezione ottimizza le performance "memoizzando" i dati derivati.
+  // I calcoli vengono eseguiti solo quando le loro dipendenze (es. transazioni, filtri) cambiano.
 
-  // Calcola i saldi per ogni conto
-  const accountBalances = accounts.map(account => {
+  const endOfToday = useMemo(() => {
+    const d = new Date();
+    d.setHours(23, 59, 59, 999);
+    return d;
+  }, [new Date().getDate()]); // Si aggiorna solo una volta al giorno
+
+  const accountBalances = useMemo(() => accounts.map(account => {
     const accountIncome = transactions
       .filter(t => t.type === 'income' && t.accountId === account.id && t.timestamp <= endOfToday.getTime())
       .reduce((sum, t) => sum + t.amount, 0);
     const accountExpenses = transactions
       .filter(t => t.type === 'expense' && t.accountId === account.id && t.timestamp <= endOfToday.getTime())
       .reduce((sum, t) => sum + t.amount, 0);
-    return {
-      ...account,
-      balance: accountIncome - accountExpenses,
-    };
-  });
+    return { ...account, balance: accountIncome - accountExpenses };
+  }), [accounts, transactions, endOfToday]);
 
-  // Filtra le transazioni in base al periodo e al conto selezionato
-  const filteredTransactions = transactions.filter(t => {
+  const filteredTransactions = useMemo(() => transactions.filter(t => {
     const transactionDate = new Date(t.timestamp);
-    if (transactionDate > endOfToday) {
-      return false;
-    }
+    if (transactionDate > endOfToday) return false;
+
     const isPeriodMatch = () => {
-      if (filterPeriod === 'month') {
-        return transactionDate.getFullYear() === selectedYear && (transactionDate.getMonth() + 1) === selectedMonth;
-      }
-      if (filterPeriod === 'year') {
-        return transactionDate.getFullYear() === selectedYear;
-      }
+      if (filterPeriod === 'month') return transactionDate.getFullYear() === selectedYear && (transactionDate.getMonth() + 1) === selectedMonth;
+      if (filterPeriod === 'year') return transactionDate.getFullYear() === selectedYear;
       return true;
     };
-    const isAccountMatch = () => {
-      return selectedAccountId === 'all' || t.accountId === selectedAccountId;
-    };
-    const isCategoryMatch = () => {
-      return filterCategories.length === 0 || filterCategories.includes(t.category);
-    };
+    const isAccountMatch = () => selectedAccountId === 'all' || t.accountId === selectedAccountId;
+    const isCategoryMatch = () => filterCategories.length === 0 || filterCategories.includes(t.category);
     const isSubcategoryMatch = () => {
-      if (filterSubcategories.length === 0) {
-        return true;
-      }
+      if (filterSubcategories.length === 0) return true;
       return t.subcategory ? filterSubcategories.includes(t.subcategory) : false;
     };
-    return isPeriodMatch() && isAccountMatch() && isCategoryMatch() && isSubcategoryMatch();
-  });
 
-  // Filtra le transazioni future
-  const futureTransactions = transactions
+    return isPeriodMatch() && isAccountMatch() && isCategoryMatch() && isSubcategoryMatch();
+  }), [transactions, endOfToday, filterPeriod, selectedMonth, selectedYear, selectedAccountId, filterCategories, filterSubcategories]);
+
+  const futureTransactions = useMemo(() => transactions
     .filter(t => {
       const transactionDate = new Date(t.timestamp);
-      if (transactionDate <= endOfToday) {
-        return false;
-      }
-      const isAccountMatch = () => {
-        return selectedAccountId === 'all' || t.accountId === selectedAccountId;
-      };
-      const isCategoryMatch = () => {
-        return filterCategories.length === 0 || filterCategories.includes(t.category);
-      };
+      if (transactionDate <= endOfToday) return false;
+
+      const isAccountMatch = () => selectedAccountId === 'all' || t.accountId === selectedAccountId;
+      const isCategoryMatch = () => filterCategories.length === 0 || filterCategories.includes(t.category);
       const isSubcategoryMatch = () => {
-        if (filterSubcategories.length === 0) {
-          return true;
-        }
+        if (filterSubcategories.length === 0) return true;
         return t.subcategory ? filterSubcategories.includes(t.subcategory) : false;
       };
+
       return isAccountMatch() && isCategoryMatch() && isSubcategoryMatch();
     })
-    .sort((a, b) => a.timestamp - b.timestamp); // Ordina per data crescente
-  // Calcola i totali per la dashboard
-  const totalIncome = filteredTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
-  const totalExpenses = filteredTransactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
-  
-  // Calcola i totali per categoria per il grafico a torta
-  const expensesByCategory = filteredTransactions.filter(t => t.type === 'expense').reduce((acc, t) => {
+    .sort((a, b) => a.timestamp - b.timestamp), [transactions, endOfToday, selectedAccountId, filterCategories, filterSubcategories]);
+
+  const { totalIncome, totalExpenses } = useMemo(() => ({
+    totalIncome: filteredTransactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0),
+    totalExpenses: filteredTransactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0),
+  }), [filteredTransactions]);
+
+  const expensesByCategory = useMemo(() => filteredTransactions.filter(t => t.type === 'expense').reduce((acc, t) => {
     const cat = t.category || 'Altro';
     acc[cat] = (acc[cat] || 0) + t.amount;
     return acc;
-  }, {});
+  }, {}), [filteredTransactions]);
 
-  // Calcoli specifici per la vista Saldo (non filtrati)
-  const allPastTransactions = transactions.filter(t => new Date(t.timestamp) <= endOfToday);
-  const balanceViewTotalBalance = accountBalances.reduce((sum, acc) => sum + acc.balance, 0);
-  const balanceViewRecentTransactions = allPastTransactions.slice(0, 10);
-  const balanceViewExpensesByCategory = allPastTransactions
-    .filter(t => t.type === 'expense')
-    .reduce((acc, t) => {
+  const allPastTransactions = useMemo(() => transactions.filter(t => new Date(t.timestamp) <= endOfToday), [transactions, endOfToday]);
+
+  const balanceViewTotalBalance = useMemo(() => accountBalances.reduce((sum, acc) => sum + acc.balance, 0), [accountBalances]);
+
+  const balanceViewRecentTransactions = useMemo(() => allPastTransactions.slice(0, 10), [allPastTransactions]);
+
+  const balanceViewExpensesByCategory = useMemo(() => allPastTransactions.filter(t => t.type === 'expense').reduce((acc, t) => {
       const cat = t.category || 'Altro';
       acc[cat] = (acc[cat] || 0) + t.amount;
       return acc;
-    }, {});
-  const balanceViewPieChartData = Object.keys(balanceViewExpensesByCategory).map((category, index) => ({
+    }, {}), [allPastTransactions]);
+
+  const balanceViewPieChartData = useMemo(() => Object.keys(balanceViewExpensesByCategory).map((category, index) => ({
     name: category,
     amount: balanceViewExpensesByCategory[category],
     color: Colors.chartColors[index % Colors.chartColors.length]
-  }));
+  })), [balanceViewExpensesByCategory]);
 
-  const pieChartData = Object.keys(expensesByCategory).map((category, index) => {
+  const pieChartData = useMemo(() => Object.keys(expensesByCategory).map((category, index) => {
     return {
       name: category,
       amount: expensesByCategory[category],
       color: Colors.chartColors[index % Colors.chartColors.length]
     };
-  });
+  }), [expensesByCategory]);
 
-  // Calcola i totali per categoria per il grafico a torta delle entrate
-  const incomeByCategory = filteredTransactions.filter(t => t.type === 'income').reduce((acc, t) => {
+  const incomeByCategory = useMemo(() => filteredTransactions.filter(t => t.type === 'income').reduce((acc, t) => {
     const cat = t.category || 'Altro';
     acc[cat] = (acc[cat] || 0) + t.amount;
     return acc;
-  }, {});
+  }, {}), [filteredTransactions]);
 
-  const incomePieChartData = Object.keys(incomeByCategory).map((category, index) => ({ name: category, amount: incomeByCategory[category], color: Colors.chartColors[index % Colors.chartColors.length] }));
+  const incomePieChartData = useMemo(() => Object.keys(incomeByCategory).map((category, index) => ({
+    name: category,
+    amount: incomeByCategory[category],
+    color: Colors.chartColors[index % Colors.chartColors.length]
+  })), [incomeByCategory]);
 
   const renderCategoryFilters = () => {
     const availableSubcategories = (filterCategories.length > 0
@@ -2439,6 +2454,22 @@ const renderFutureView = () => {
     );
   };
 
+  const SplashScreen = ({ progress, message }) => (
+    <View style={styles.splashContainer}>
+      <Image source={appSplashImage} style={styles.splashTitleImage} />
+      <View style={styles.progressContainer}>
+        <Text style={styles.splashMessage}>{message}</Text>
+        <View style={styles.progressBarBackground}>
+          <View style={[styles.progressBarFill, { width: `${progress}%` }]} />
+        </View>
+      </View>
+    </View>
+  );
+
+  if (isLoading) {
+    return <SplashScreen progress={loadingProgress} message={loadingMessage} />;
+  }
+
   return (
     <SafeAreaView style={styles.mainContainer}>
       <View style={styles.titleContainer}>
@@ -2571,6 +2602,38 @@ const styles = StyleSheet.create({
   filterButtonText: {
     color: Colors.text,
     fontWeight: 'bold',
+  },
+  // Splash Screen Styles
+  splashContainer: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: Colors.background,
+  },
+  splashTitleImage: {
+    width: '80%',
+    resizeMode: 'contain',
+    marginBottom: 40,
+  },
+  progressContainer: {
+    width: '70%',
+    alignItems: 'center',
+  },
+  splashMessage: {
+    color: Colors.text,
+    fontSize: 16,
+    marginBottom: 10,
+  },
+  progressBarBackground: {
+    height: 10,
+    width: '100%',
+    backgroundColor: '#4b5563',
+    borderRadius: 5,
+  },
+  progressBarFill: {
+    height: '100%',
+    backgroundColor: Colors.primary,
+    borderRadius: 5,
   },
   filterInfoContainer: {
     paddingHorizontal: 10,
