@@ -9,7 +9,7 @@ export const Colors = {
   text: '#f3f4f6',
   placeholder: '#9ca3af',
   red: '#ef4444',
-  chartColors: ['#a855f7', '#6366f1', '#f97316', '#ef4444', '#10b981', '#3b82f6', '#f59e0b'],
+  chartColors: ['#00fb71ff', '#292cffff', '#ffba89ff', '#ff0000ff', '#fbff00ff', '#ff00d9ff', '#9100caff', '#00ddffff', '#179700ff', '#ffffffff', '#000000ff'],
   icon: '#9ca3af',
 };
 
